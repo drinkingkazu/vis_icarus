@@ -1,20 +1,51 @@
 import numpy as np
 import plotly.graph_objs as go
 
-def load_geometry(geo_yaml):
+def load_geometry_from_pset(cfg):
+    from flashmatch import flashmatch
+    pset = flashmatch.CreatePSetFromFile(cfg)
+    det = {}
+    det['MinPosition'] = ast.literal_eval(pset.get('MinPosition'))
+    det['MaxPosition'] = ast.literal_eval(pset.get('MaxPosition'))
+    det['MinPosition_TPC0'] = ast.literal_eval(pset.get('MinPosition_TPC0'))
+    det['MaxPosition_TPC0'] = ast.literal_eval(pset.get('MaxPosition_TPC0'))
+    det['MinPosition_TPC1'] = ast.literal_eval(pset.get('MinPosition_TPC1'))
+    det['MaxPosition_TPC1'] = ast.literal_eval(pset.get('MaxPosition_TPC1'))
+    pmt = 0
+    while 1:
+        if not pset.contains_value('PMT%d' % pmt):
+            break
+        det['PMT%d' % pmt] = ast.literal_eval(pset.get('PMT%d' % pmt))
+        pmt+=1
+    return det
+
+def load_geometry_from_yaml(cfg):
+    import yaml
+    return yaml.load(open(cfg).read(),Loader=yaml.Loader)['DetectorSpecs']
+
+def load_geometry(data=None):
     """
-    Produces geometry information dictionary with a given yaml input file
+    Produces geometry information dictionary with a given input data file
     INPUTS
-        - geo_yaml is a path to yaml file that denotes geometry information. Necessary elements include
-          MinPosition_TPCX, MaxPosition_TPCX for X=0 and 1 (for cryostat 0). Also PMTX for X 0 to 179.
-          Finally the MinPosition_Cryo0, MaxPosition_Cryo0 denoting cryostat 0 min and max points.
+        - data is a path to a geometry data file that can be either yaml or larcv/opt0finder PSet format. 
+          Necessary elements include MinPosition_TPCX, MaxPosition_TPCX for X=0 and 1 (for cryostat 0). 
+          Also PMTX for X 0 to 179. Finally the MinPosition_Cryo0, MaxPosition_Cryo0 denoting 
+          cryostat 0 min and max points.
     OUTPUT
         - geo is a dictionary with keys 'anode0', 'anode1', 'cathode0', 'cryo0' with an associated
           numpy arrays of shape (2,3) for min and max xyz point coordinates. Finally 'pmt' is associated
           to a numpy array of shape (180,3) for 180 PMT xyz coordinates.
     """
-    import yaml
-    det=yaml.load(open('icarus.cfg').read(),Loader=yaml.Loader)['DetectorSpecs']
+    import os
+    if data is None: data = os.path.join(os.environ['VIS_ICARUS'],'dat','icarus.yaml')
+    det=None
+    if data.endswith('.yaml') or data.endswith('.yml'):
+        det = load_geometry_from_yaml(data)
+    elif data.endswith('.cfg') or data.endswith('.fcl'):
+        det = load_geometry_from_pset(data)
+    else:
+        print('Config file not in supported format:',data)
+        raise TypeError
     geo={}
     # create a table for PMT
     geo['pmts']=np.array([det['PMT%d' % i] for i in range(180)]).astype(np.float32)
@@ -41,8 +72,9 @@ def load_geometry(geo_yaml):
     c0_max=det['MaxPosition']
     geo['cryo0']=np.array([c0_min,c0_max]).astype(np.float32)
     return geo
-    
-def icarus_layout3d(ranges=None):
+
+
+def icarus_layout3d(ranges=None,set_camera=True,dark=False):
     """
     Produces go.Layout object for a ICARUS event display.
     INPUTS
@@ -67,42 +99,49 @@ def icarus_layout3d(ranges=None):
         xrange = (np.min(ranges[:,0]),np.max(ranges[:,0]))
         yrange = (np.min(ranges[:,1]),np.max(ranges[:,1]))
         zrange = (np.min(ranges[:,2]),np.max(ranges[:,2]))
-            
+    
+    scene = dict(xaxis = dict(nticks=10, range = xrange, showticklabels=True, 
+                              title='x',
+                              #backgroundcolor="lightgray", gridcolor="rgb(255, 255, 255)",
+                              #showbackground=True,
+                             ),
+                 yaxis = dict(nticks=10, range = yrange, showticklabels=True, 
+                              title='y',
+                              #backgroundcolor="lightgray", gridcolor="rgb(255, 255, 255)",
+                              #showbackground=True
+                             ),
+                 zaxis = dict(nticks=10, range = zrange, showticklabels=True,
+                              title='z',
+                              #backgroundcolor="lightgray", gridcolor="rgb(255, 255, 255)",
+                              #showbackground=True,
+                             ),
+                 aspectmode='data',
+                )
+    
+    if set_camera: scene['camera'] = dict(up=dict(x=0, y=1, z=0), 
+                                          center=dict(x=0, y=0, z=-1.), 
+                                          eye=dict(x=0.0, y=0.0, z=1.0),
+                                          )
     layout = go.Layout(
         showlegend=False,
         width=1536,
         height=768,
-        #xaxis=titles[0], yaxis=titles[1], zaxis=titles[2],
-        margin=dict(l=0,r=0,b=0,t=0),        
-        scene = dict(
-            xaxis = dict(nticks=10, range = xrange, showticklabels=True, 
-                         title='x',
-                         backgroundcolor="lightgray", gridcolor="rgb(255, 255, 255)",
-                         showbackground=True,
-                        ),
-            yaxis = dict(nticks=10, range = yrange, showticklabels=True, 
-                         title='y',
-                         backgroundcolor="lightgray", gridcolor="rgb(255, 255, 255)",
-                         showbackground=True
-                        ),
-            zaxis = dict(nticks=10, range = zrange, showticklabels=True,
-                         title='z',
-                         backgroundcolor="lightgray", gridcolor="rgb(255, 255, 255)",
-                         showbackground=True,
-                        ),
-            aspectmode='data',
-            camera = dict(
-                up=dict(x=0, y=1, z=0),
-                center=dict(x=0, y=0, z=-1.), 
-                eye=dict(x=0.0, y=0.0, z=1.0)
-                #eye=dict(x=1.2, y=1.2, z=0.075)
-            ),
-        ),  
+        hovermode='closest',
+        margin=dict(l=0,r=0,b=0,t=0),
+        #plot_bgcolor  = '#111111',
+        #paper_bgcolor = '#111111',
+        #font = dict(color = '#7FDBFF'),
+        template='plotly_dark',
+        #uirevision = False,
+        #uirevision = 'dataset',
+        uirevision = 'same',
+        scene = scene,
     )
+
     return layout
 
 
-def get_trace_icarus(pmt_value=None,geo_yaml='icarus.cfg',
+def get_trace_icarus(pmt_value=None,geo_yaml=None,
                      draw_anode0=True,draw_anode1=True,draw_cathode=True,draw_pmts=True,
                      return_geo=False):
     """
